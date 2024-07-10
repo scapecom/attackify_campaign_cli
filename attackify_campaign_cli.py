@@ -1,10 +1,8 @@
 ###
-#
 # Name: ATTACKIFY - Mitre ATT&CK Threat Actor Group Emulation for ATTACKIFY Campaigns
 #
 # Author: Gareth Phillips (@attackify)
 # License: MIT License - Copyright (c) 2024 SCAPECOM/ATTACKIFY
-#
 ###
 import requests
 import json
@@ -16,6 +14,7 @@ from difflib import get_close_matches
 import os
 import signal
 import sys
+import re
 
 BASE_URL = "http://dev.attackify.com/api"
 MITRE_ATTCK_URL = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
@@ -94,10 +93,38 @@ def load_attack_data():
     response = requests.get(MITRE_ATTCK_URL)
     return MemoryStore(stix_data=response.json())
 
-def find_similar_groups(src, input_name, max_suggestions=5):
+def find_similar_groups(src, input_name, max_suggestions=10):
     all_groups = src.query([Filter('type', '=', 'intrusion-set')])
     group_names = [group.name for group in all_groups]
-    return get_close_matches(input_name, group_names, n=max_suggestions, cutoff=0.6)
+    
+    input_name_lower = input_name.lower()
+    input_words = re.findall(r'\w+', input_name_lower)
+    
+    def similarity_score(group_name):
+        group_name_lower = group_name.lower()
+        group_words = re.findall(r'\w+', group_name_lower)
+        
+        if input_name_lower == group_name_lower:
+            return float('inf')
+        
+        if 'apt' in input_words:
+            apt_pattern = re.compile(r'apt\s*\d+')
+            if apt_pattern.search(input_name_lower) and apt_pattern.search(group_name_lower):
+                return 100
+        
+        word_score = sum(word in group_words for word in input_words)
+        
+        substring_score = 0
+        if input_name_lower in group_name_lower:
+            substring_score = len(input_name_lower) / len(group_name_lower)
+        
+        return word_score + substring_score
+
+    sorted_groups = sorted(group_names, key=similarity_score, reverse=True)
+    
+    similar_groups = [group for group in sorted_groups if similarity_score(group) > 0]
+    
+    return similar_groups[:max_suggestions]
 
 def get_mitre_techniques_for_group(src, group_name):
     group = src.query([
@@ -109,21 +136,32 @@ def get_mitre_techniques_for_group(src, group_name):
         print(f"\n [!] Group '{group_name}' not found!")
         similar_groups = find_similar_groups(src, group_name)
         if similar_groups:
-            print("\nDid you mean one of these groups?\n")
-            for i, name in enumerate(similar_groups, 1):
-                print(f" - {i}. {name}")
-            choice = input("\nEnter the number of the correct group (or press Enter to cancel): ")
-            if choice.isdigit() and 1 <= int(choice) <= len(similar_groups):
-                group_name = similar_groups[int(choice) - 1]
+            if similar_groups[0].lower() == group_name.lower():
+                # Exact match found, use it directly
+                group_name = similar_groups[0]
                 group = src.query([
                     Filter('type', '=', 'intrusion-set'),
                     Filter('name', '=', group_name)
                 ])
             else:
-                return []
+                print("\nDid you mean one of these groups?\n")
+                for i, name in enumerate(similar_groups, 1):
+                    print(f" - {i}. {name}")
+                choice = input("\nEnter the number of the correct group (or press Enter to cancel): ")
+                if choice.isdigit() and 1 <= int(choice) <= len(similar_groups):
+                    group_name = similar_groups[int(choice) - 1]
+                    group = src.query([
+                        Filter('type', '=', 'intrusion-set'),
+                        Filter('name', '=', group_name)
+                    ])
+                else:
+                    return [], group_name
         else:
             print("\t [!] No similar GROUP names found!\n")
-            return []
+            return [], group_name
+    
+    if not group:
+        return [], group_name
 
     group = group[0]
 
@@ -139,7 +177,7 @@ def get_mitre_techniques_for_group(src, group_name):
             if tech_id:
                 techniques.append((tech_id, technique.name))
 
-    return techniques
+    return techniques, group_name
 
 def format_technique_output(techniques):
     return [f" - {technique_id}: {technique_name}" for technique_id, technique_name in techniques]
@@ -258,12 +296,12 @@ def create_new_campaign(token, src):
     campaign_name = input("Enter campaign name: ")
     campaign_description = input("Enter campaign description: ")
 
-    group_name = input("Enter the name of the MITRE ATT&CK group to base the campaign on: ")
+    group_input = input("Enter the name of the MITRE ATT&CK group to base the campaign on: ")
     
-    techniques = get_mitre_techniques_for_group(src, group_name)
+    techniques, selected_group = get_mitre_techniques_for_group(src, group_input)
     
     if not techniques:
-        print(f"\n [!] No techniques found for {group_name}. Cannot create campaign!")
+        print(f"\n [!] No techniques found for {selected_group}. Cannot create campaign!")
         return
 
     matching_modules = get_attackify_modules_for_techniques(token, techniques)
@@ -280,12 +318,12 @@ def create_new_campaign(token, src):
             unique_module_ids.add(module['module_id'])
             unique_modules.append(module)
 
-    print(f"\n [i] Found {len(unique_modules)} unique matching ATTACKIFY modules for {group_name}")
+    print(f"\n [i] Found {len(unique_modules)} unique matching ATTACKIFY modules for {selected_group}")
 
     campaign_data = {
         "environment": selected_env['id'],
         "name": campaign_name,
-        "description": f"[{group_name}] " + campaign_description,
+        "description": f"[{selected_group}] " + campaign_description,
         "simulate": [{"simulation": module['module_id'], "duration": 1} for module in unique_modules]
     }
 
@@ -295,13 +333,9 @@ def create_new_campaign(token, src):
         "content-type": "application/json"
     }
     response = requests.post(f"{BASE_URL}/simulate/campaigns/{selected_env['id']}/new", headers=headers, json=campaign_data)
-    
-    # Simulated response for testing
-    #response = type('obj', (object,), {'status_code': 200})
 
     if response.status_code == 200:
         print("\n   [i] Campaign Created Successfully in ATTACKIFY!")
-        # print(json.dumps(response.json(), indent=2))
     else:
         print(f"Failed to create campaign. Status code: {response.status_code}")
         print(response.text)
@@ -347,16 +381,16 @@ def main():
 
             if choice == '2':
                 print(ATTACKIFY_HEADER + "\n\n")
-                group = input("Enter the name of the MITRE ATT&CK Threat Actor Group to SEARCH for: ")
-                print(f"\nSearching for TECHNIQUES used by {group}...")
+                group_input = input("Enter the name of the MITRE ATT&CK Threat Actor Group to SEARCH for: ")
+                print(f"\nSearching for TECHNIQUES used by {group_input}...")
                 try:
-                    techniques = get_mitre_techniques_for_group(src, group)
+                    techniques, selected_group = get_mitre_techniques_for_group(src, group_input)
                     if techniques:
-                        print(f"Techniques used by {group}:")
+                        print(f"Techniques used by {selected_group}:")
                         formatted_techniques = format_technique_output(techniques)
-                        paginate_output(f"\nMitre ATT&CK Threat Actor Group {group} Techniques:\n", formatted_techniques)
+                        paginate_output(f"\nMitre ATT&CK Threat Actor Group {selected_group} Techniques:\n", formatted_techniques)
                     elif techniques is not None:
-                        print(f"No techniques found for {group}.")
+                        print(f"No techniques found for {selected_group}.")
                 except Exception as e:
                     print(f"[*] An error occurred while fetching techniques: {str(e)}")
                     traceback.print_exc()
@@ -398,20 +432,20 @@ def main():
 
             elif choice == '5':
                 print(ATTACKIFY_HEADER + "\n\n")
-                group = input("Enter the name of the MITRE ATT&CK Threat Actor Group to search for: ")
-                print(f"\nSearching for techniques used by {group} and mapping to ATTACKIFY modules...\n")
+                group_input = input("Enter the name of the MITRE ATT&CK Threat Actor Group to search for: ")
+                print(f"\nSearching for techniques used by {group_input} and mapping to ATTACKIFY modules...\n")
                 try:
-                    techniques = get_mitre_techniques_for_group(src, group)
+                    techniques, selected_group = get_mitre_techniques_for_group(src, group_input)
                     if techniques:
-                        print(f"Techniques used by {group}:")
+                        print(f"Techniques used by {selected_group}:")
                         formatted_techniques = format_technique_output(techniques)
-                        paginate_output(f"\nMitre ATT&CK Listed TTPs by {group}:\n", formatted_techniques)
+                        paginate_output(f"\nMitre ATT&CK Listed TTPs by {selected_group}:\n", formatted_techniques)
                         
                         print("\nMapping to ATTACKIFY modules...")
                         matching_modules = get_attackify_modules_for_techniques(args.token, techniques)
-                        print_matching_modules(group, matching_modules)
+                        print_matching_modules(selected_group, matching_modules)
                     else:
-                        print(f"No techniques found for {group}.")
+                        print(f"No techniques found for {selected_group}.")
                 except Exception as e:
                     print(f"An error occurred while fetching techniques or mapping to modules: {str(e)}")
                     traceback.print_exc()
