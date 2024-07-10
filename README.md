@@ -4,6 +4,8 @@
 
 ATTACKIFY Threat Actor Campaign CLI is a powerful tool designed to interface with the ATTACKIFY API and MITRE ATT&CK framework. This command-line interface allows security professionals and researchers to explore threat actor techniques, map them to ATTACKIFY simulation modules, and automagically create targeted campaign emulations based on real-world threat actor behaviors directly from Mitre ATT&CK.
 
+Blog post about it: <a href="https://www.attackify.com/blog/bridging_mitre_attck_attackify/" target="_blogpost">Bridging Mitre ATT&CK and ATTACKIFY</a>
+
 ## Features
 
 - List recent MITRE ATT&CK threat actor groups
