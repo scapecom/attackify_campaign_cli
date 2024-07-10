@@ -16,7 +16,7 @@ import signal
 import sys
 import re
 
-BASE_URL = "http://dev.attackify.com/api"
+BASE_URL = "http://console-api.attackify.com/api"
 MITRE_ATTCK_URL = "https://raw.githubusercontent.com/mitre/cti/master/enterprise-attack/enterprise-attack.json"
 
 def clear_screen():
