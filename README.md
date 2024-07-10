@@ -37,7 +37,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-Run the CLI with your ATTACKIFY API token (beta version to use Bearer Token for now):
+Run the CLI with your ATTACKIFY API token (beta version to use Bearer Token for now), also to automagically run ATTACKIFY Campaigns from Mitre ATT&CK threat groups, you will need a PROFESSIONAL account with ATTACKIFY. You can still run the tool with a FREE tier to extract mappings between ATT&CK TTPs and ATTACKIFY modules:
 
 ```bash
 python attackify_cli.py --token YOUR_API_TOKEN_HERE
